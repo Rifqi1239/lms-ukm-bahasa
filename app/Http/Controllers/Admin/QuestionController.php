@@ -6,26 +6,99 @@ use App\Http\Controllers\Controller;
 use App\Models\Module;
 use App\Models\Question;
 use App\Models\QuestionOption;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class QuestionController extends Controller
 {
     /**
-     * Menampilkan daftar soal.
+     * Mengambil pengguna yang sedang login.
      */
+    private function currentUser(): User
+    {
+        /** @var User|null $user */
+        $user = Auth::user();
+
+        abort_unless($user, 401, 'Sesi pengguna tidak valid.');
+
+        return $user;
+    }
 
     /**
-     * Menampilkan daftar soal dan menyiapkan form tambah/edit.
+     * Memastikan pengajar sudah terdaftar dalam kelompok bahasa.
+     */
+    private function authorizeTeacherGroup(): void
+    {
+        $user = $this->currentUser();
+
+        if ($user->role === 'pengajar') {
+            abort_unless(
+                $user->language_group_id,
+                403,
+                'Akun pengajar belum terdaftar pada kelompok bahasa.'
+            );
+        }
+    }
+
+    /**
+     * Memastikan soal berasal dari kelompok bahasa pengajar.
+     */
+    private function authorizeQuestionAccess(Question $question): void
+    {
+        $user = $this->currentUser();
+
+        if ($user->role === 'pengajar') {
+            $this->authorizeTeacherGroup();
+
+            abort_unless(
+                $question->module &&
+                $question->module->language_group_id == $user->language_group_id,
+                403,
+                'Anda tidak memiliki akses ke soal ini.'
+            );
+        }
+    }
+
+    /**
+     * Menampilkan daftar soal.
      */
     public function index(Request $request)
     {
-        $modules = Module::orderBy('title')->get();
+        $user = $this->currentUser();
+
+        $this->authorizeTeacherGroup();
+
+        // Modul yang dapat dipilih.
+        $modules = Module::when(
+            $user->role === 'pengajar',
+            function ($query) use ($user) {
+                $query->where(
+                    'language_group_id',
+                    $user->language_group_id
+                );
+            }
+        )
+            ->orderBy('title')
+            ->get();
 
         $selectedModuleId = $request->query('module_id');
 
+        // Daftar soal dibatasi berdasarkan kelompok bahasa.
         $questions = Question::with(['module', 'options'])
+            ->when(
+                $user->role === 'pengajar',
+                function ($query) use ($user) {
+                    $query->whereHas('module', function ($moduleQuery) use ($user) {
+                        $moduleQuery->where(
+                            'language_group_id',
+                            $user->language_group_id
+                        );
+                    });
+                }
+            )
             ->when($selectedModuleId, function ($query, $moduleId) {
                 $query->where('module_id', $moduleId);
             })
@@ -33,11 +106,22 @@ class QuestionController extends Controller
             ->paginate(10)
             ->withQueryString();
 
-        // Soal yang dipilih untuk diedit pada panel sebelah kanan.
+        // Soal yang dipilih untuk diedit.
         $selectedQuestion = null;
 
         if ($request->filled('edit')) {
             $selectedQuestion = Question::with('options')
+                ->when(
+                    $user->role === 'pengajar',
+                    function ($query) use ($user) {
+                        $query->whereHas('module', function ($moduleQuery) use ($user) {
+                            $moduleQuery->where(
+                                'language_group_id',
+                                $user->language_group_id
+                            );
+                        });
+                    }
+                )
                 ->when($selectedModuleId, function ($query, $moduleId) {
                     $query->where('module_id', $moduleId);
                 })
@@ -52,17 +136,28 @@ class QuestionController extends Controller
         ));
     }
 
-
     /**
      * Menampilkan form tambah soal.
      */
     public function create()
     {
-        $modules = Module::orderBy('title')->get();
+        $user = $this->currentUser();
 
-        return view('admin.questions.create', [
-            'modules' => $modules,
-        ]);
+        $this->authorizeTeacherGroup();
+
+        $modules = Module::when(
+            $user->role === 'pengajar',
+            function ($query) use ($user) {
+                $query->where(
+                    'language_group_id',
+                    $user->language_group_id
+                );
+            }
+        )
+            ->orderBy('title')
+            ->get();
+
+        return view('admin.questions.create', compact('modules'));
     }
 
     /**
@@ -84,8 +179,7 @@ class QuestionController extends Controller
                     'question_id' => $question->id,
                     'label' => $label,
                     'option_text' => $validated['options'][$label],
-                    'is_correct' =>
-                    $label === $validated['correct_option'],
+                    'is_correct' => $label === $validated['correct_option'],
                 ]);
             }
         });
@@ -100,9 +194,23 @@ class QuestionController extends Controller
      */
     public function edit(Question $question)
     {
+        $user = $this->currentUser();
+
+        $this->authorizeQuestionAccess($question);
+
         $question->load('options');
 
-        $modules = Module::orderBy('title')->get();
+        $modules = Module::when(
+            $user->role === 'pengajar',
+            function ($query) use ($user) {
+                $query->where(
+                    'language_group_id',
+                    $user->language_group_id
+                );
+            }
+        )
+            ->orderBy('title')
+            ->get();
 
         return view('admin.questions.edit', compact(
             'question',
@@ -115,6 +223,8 @@ class QuestionController extends Controller
      */
     public function update(Request $request, Question $question)
     {
+        $this->authorizeQuestionAccess($question);
+
         $validated = $this->validateQuestion($request);
 
         DB::transaction(function () use ($validated, $question) {
@@ -132,8 +242,7 @@ class QuestionController extends Controller
                     ],
                     [
                         'option_text' => $validated['options'][$label],
-                        'is_correct' =>
-                        $label === $validated['correct_option'],
+                        'is_correct' => $label === $validated['correct_option'],
                     ]
                 );
             }
@@ -149,6 +258,8 @@ class QuestionController extends Controller
      */
     public function destroy(Question $question)
     {
+        $this->authorizeQuestionAccess($question);
+
         $question->delete();
 
         return redirect()
@@ -161,11 +272,26 @@ class QuestionController extends Controller
      */
     private function validateQuestion(Request $request): array
     {
+        $user = $this->currentUser();
+
+        $this->authorizeTeacherGroup();
+
+        $moduleRule = Rule::exists('modules', 'id');
+
+        if ($user->role === 'pengajar') {
+            $moduleRule->where(function ($query) use ($user) {
+                $query->where(
+                    'language_group_id',
+                    $user->language_group_id
+                );
+            });
+        }
+
         return $request->validate([
             'module_id' => [
                 'required',
                 'integer',
-                'exists:modules,id',
+                $moduleRule,
             ],
             'question_text' => [
                 'required',
