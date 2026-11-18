@@ -5,20 +5,70 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\LanguageGroup;
 use App\Models\Module;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ModuleController extends Controller
 {
     /**
+     * Memastikan pengajar memiliki kelompok bahasa.
+     */
+    private function authorizeTeacherGroup(): void
+    {
+        /** @var User $user */
+        $user = Auth::user();
+
+        if ($user->getAttribute('role') === 'pengajar') {
+            abort_unless(
+            $user->getAttribute('language_group_id'),
+                403,
+                'Akun pengajar belum terdaftar pada kelompok bahasa.'
+            );
+        }
+    }
+
+    /**
+     * Memastikan modul sesuai dengan kelompok bahasa pengajar.
+     */
+    private function authorizeModuleAccess(Module $module): void
+    {
+        /** @var User $user */
+        $user = Auth::user();
+
+        if ($user->getAttribute('role') === 'pengajar') {
+            $this->authorizeTeacherGroup();
+
+            abort_unless(
+                $module->getAttribute('language_group_id') == $user->getAttribute('language_group_id'),
+                403,
+                'Anda tidak memiliki akses ke modul ini.'
+            );
+        }
+    }
+
+    /**
      * Menampilkan daftar modul.
      */
     public function index(Request $request): View
     {
+        /** @var User $user */
+        $user = Auth::user();
+
+        $this->authorizeTeacherGroup();
+
         $modules = Module::with('languageGroup')
             ->withCount('questions')
+            ->when($user->getAttribute('role') === 'pengajar', function ($query) use ($user) {
+                $query->where(
+                    'language_group_id',
+                    $user->getAttribute('language_group_id')
+                );
+            })
             ->when($request->filled('search'), function ($query) use ($request) {
                 $search = $request->input('search');
 
@@ -36,7 +86,19 @@ class ModuleController extends Controller
      */
     public function create(): View
     {
-        $languageGroups = LanguageGroup::orderBy('name')->get();
+        /** @var User $user */
+        $user = Auth::user();
+
+        $this->authorizeTeacherGroup();
+
+        $languageGroups = LanguageGroup::when(
+            $user->getAttribute('role') === 'pengajar',
+            function ($query) use ($user) {
+                $query->where('id', $user->getAttribute('language_group_id'));
+            }
+        )
+            ->orderBy('name')
+            ->get();
 
         return view('admin.modules.create', compact('languageGroups'));
     }
@@ -46,11 +108,17 @@ class ModuleController extends Controller
      */
     public function store(Request $request)
     {
+        /** @var User $user */
+        $user = Auth::user();
+
+        $this->authorizeTeacherGroup();
+
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'language_group_id' => [
-                'required',
+                Rule::requiredIf($user->getAttribute('role') === 'admin'),
+                'nullable',
                 'integer',
                 'exists:language_groups,id',
             ],
@@ -73,6 +141,10 @@ class ModuleController extends Controller
             ],
         ]);
 
+        $languageGroupId = $user->getAttribute('role') === 'pengajar'
+            ? $user->getAttribute('language_group_id')
+            : $validated['language_group_id'];
+
         $pdfPath = $request->file('pdf_file')
             ->store('modules/pdfs', 'public');
 
@@ -86,7 +158,7 @@ class ModuleController extends Controller
         Module::create([
             'title' => $validated['title'],
             'description' => $validated['description'] ?? null,
-            'language_group_id' => $validated['language_group_id'],
+            'language_group_id' => $languageGroupId,
             'pdf_file' => $pdfPath,
             'cover_image' => $coverPath,
             'has_exercise' => false,
@@ -103,16 +175,30 @@ class ModuleController extends Controller
      */
     public function edit(Module $module): View
     {
-        $languageGroups = LanguageGroup::orderBy('name')->get();
+        /** @var User $user */
+        $user = Auth::user();
+
+        $this->authorizeModuleAccess($module);
+
+        $languageGroups = LanguageGroup::when(
+            $user->getAttribute('role') === 'pengajar',
+            function ($query) use ($user) {
+                $query->where('id', $user->getAttribute('language_group_id'));
+            }
+        )
+            ->orderBy('name')
+            ->get();
 
         return view('admin.modules.edit', compact('module', 'languageGroups'));
     }
 
     /**
-     * Menampilkan PDF melalui route Laravel untuk dibaca PDF.js.
+     * Menampilkan PDF melalui route Laravel.
      */
     public function pdf(Module $module): StreamedResponse
     {
+        $this->authorizeModuleAccess($module);
+
         $pdfPath = $module->getAttribute('pdf_file');
 
         abort_unless(
@@ -125,7 +211,7 @@ class ModuleController extends Controller
         $stream = Storage::disk('public')->readStream($pdfPath);
 
         abort_unless(
-            is_resource($stream),
+            \is_resource($stream),
             404,
             'File PDF modul tidak ditemukan.'
         );
@@ -149,11 +235,17 @@ class ModuleController extends Controller
      */
     public function update(Request $request, Module $module)
     {
+        /** @var User $user */
+        $user = Auth::user();
+
+        $this->authorizeModuleAccess($module);
+
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'language_group_id' => [
-                'required',
+                Rule::requiredIf($user->getAttribute('role') === 'admin'),
+                'nullable',
                 'integer',
                 'exists:language_groups,id',
             ],
@@ -182,7 +274,9 @@ class ModuleController extends Controller
         $data = [
             'title' => $validated['title'],
             'description' => $validated['description'] ?? null,
-            'language_group_id' => $validated['language_group_id'],
+            'language_group_id' => $user->getAttribute('role') === 'pengajar'
+                ? $user->getAttribute('language_group_id')
+                : $validated['language_group_id'],
         ];
 
         if ($request->hasFile('pdf_file')) {
@@ -223,6 +317,8 @@ class ModuleController extends Controller
      */
     public function destroy(Module $module)
     {
+        $this->authorizeModuleAccess($module);
+
         $pdfPath = $module->pdf_file;
         $coverPath = $module->cover_image;
 
