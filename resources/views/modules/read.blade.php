@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="id">
 
@@ -323,7 +322,7 @@
 
     <div
         class="reader-container"
-        data-pdf-url="{{ route('modules.pdf-view', $module) }}"
+        data-pdf-url="{{ route('modules.pdf-view', $module) }}?v={{ md5($module->pdf_file ?? '') }}"
         data-progress-url="{{ route('modules.progress.store', $module) }}"
         data-current-page="{{ $readingProgress?->current_page ?? 1 }}">
 
@@ -403,24 +402,24 @@
 
             @if ($module->questions()->exists())
 
-                <a
-                    href="{{ route('quiz.start', ['module' => $module->id]) }}"
-                    class="exercise-button"
-                    id="exercise-button">
-                    Kerjakan Latihan (opsional)
-                </a>
+            <a
+                href="{{ route('quiz.start', ['module' => $module->id]) }}"
+                class="exercise-button"
+                id="exercise-button">
+                Kerjakan Latihan (opsional)
+            </a>
 
             @else
 
-                <button
-                    type="button"
-                    class="exercise-button"
-                    id="exercise-button"
-                    disabled
-                    aria-disabled="true"
-                    title="Modul ini belum memiliki soal latihan">
-                    Tidak Ada Latihan
-                </button>
+            <button
+                type="button"
+                class="exercise-button"
+                id="exercise-button"
+                disabled
+                aria-disabled="true"
+                title="Modul ini belum memiliki soal latihan">
+                Tidak Ada Latihan
+            </button>
 
             @endif
 
@@ -430,7 +429,6 @@
 
     {{-- PDF.JS DAN PENYIMPANAN PROGRES --}}
     <script type="module">
-
         import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
 
         pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -579,9 +577,9 @@
                 const isPortrait =
                     baseViewport.height > baseViewport.width;
 
-                const fitScale = isPortrait
-                    ? widthScale
-                    : Math.min(widthScale, heightScale);
+                const fitScale = isPortrait ?
+                    widthScale :
+                    Math.min(widthScale, heightScale);
 
                 const scale = fitScale * zoom;
 
@@ -602,13 +600,13 @@
                 canvas.style.width = `${viewport.width}px`;
                 canvas.style.height = `${viewport.height}px`;
 
-                const transform = outputScale !== 1
-                    ? [
+                const transform = outputScale !== 1 ?
+                    [
                         outputScale, 0,
                         0, outputScale,
                         0, 0
-                    ]
-                    : null;
+                    ] :
+                    null;
 
                 renderTask = page.render({
                     canvasContext: ctx,
@@ -745,15 +743,15 @@
             const isFullscreen =
                 document.fullscreenElement === readerContainer;
 
-            fullscreenButton.textContent = isFullscreen
-                ? '✕ Keluar Full Screen'
-                : '⛶ Full Screen';
+            fullscreenButton.textContent = isFullscreen ?
+                '✕ Keluar Full Screen' :
+                '⛶ Full Screen';
 
             fullscreenButton.setAttribute(
                 'aria-label',
-                isFullscreen
-                    ? 'Keluar dari layar penuh'
-                    : 'Aktifkan layar penuh'
+                isFullscreen ?
+                'Keluar dari layar penuh' :
+                'Aktifkan layar penuh'
             );
         }
 
@@ -811,7 +809,6 @@
         updateFullscreenButton();
 
         loadPdf();
-
     </script>
 
 </body>

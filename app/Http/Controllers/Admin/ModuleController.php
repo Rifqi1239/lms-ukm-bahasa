@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\LanguageGroup;
 use App\Models\Module;
+use App\Models\ReadingProgress;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -25,7 +27,7 @@ class ModuleController extends Controller
 
         if ($user->getAttribute('role') === 'pengajar') {
             abort_unless(
-            $user->getAttribute('language_group_id'),
+                $user->getAttribute('language_group_id'),
                 403,
                 'Akun pengajar belum terdaftar pada kelompok bahasa.'
             );
@@ -44,7 +46,8 @@ class ModuleController extends Controller
             $this->authorizeTeacherGroup();
 
             abort_unless(
-                $module->getAttribute('language_group_id') == $user->getAttribute('language_group_id'),
+                (int) $module->getAttribute('language_group_id') ===
+                (int) $user->getAttribute('language_group_id'),
                 403,
                 'Anda tidak memiliki akses ke modul ini.'
             );
@@ -63,17 +66,27 @@ class ModuleController extends Controller
 
         $modules = Module::with('languageGroup')
             ->withCount('questions')
-            ->when($user->getAttribute('role') === 'pengajar', function ($query) use ($user) {
-                $query->where(
-                    'language_group_id',
-                    $user->getAttribute('language_group_id')
-                );
-            })
-            ->when($request->filled('search'), function ($query) use ($request) {
-                $search = $request->input('search');
+            ->when(
+                $user->getAttribute('role') === 'pengajar',
+                function ($query) use ($user) {
+                    $query->where(
+                        'language_group_id',
+                        $user->getAttribute('language_group_id')
+                    );
+                }
+            )
+            ->when(
+                $request->filled('search'),
+                function ($query) use ($request) {
+                    $search = $request->input('search');
 
-                $query->where('title', 'like', "%{$search}%");
-            })
+                    $query->where(
+                        'title',
+                        'like',
+                        "%{$search}%"
+                    );
+                }
+            )
             ->orderByDesc('updated_at')
             ->paginate(10)
             ->withQueryString();
@@ -94,7 +107,10 @@ class ModuleController extends Controller
         $languageGroups = LanguageGroup::when(
             $user->getAttribute('role') === 'pengajar',
             function ($query) use ($user) {
-                $query->where('id', $user->getAttribute('language_group_id'));
+                $query->where(
+                    'id',
+                    $user->getAttribute('language_group_id')
+                );
             }
         )
             ->orderBy('name')
@@ -116,22 +132,28 @@ class ModuleController extends Controller
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
+
             'language_group_id' => [
-                Rule::requiredIf($user->getAttribute('role') === 'admin'),
+                Rule::requiredIf(
+                    $user->getAttribute('role') === 'admin'
+                ),
                 'nullable',
                 'integer',
                 'exists:language_groups,id',
             ],
+
             'pdf_file' => [
                 'required',
                 'file',
                 'mimes:pdf',
                 'max:20480',
             ],
+
             'cover_mode' => [
                 'required',
                 'in:automatic,upload',
             ],
+
             'cover_image' => [
                 'required_if:cover_mode,upload',
                 'nullable',
@@ -148,22 +170,40 @@ class ModuleController extends Controller
         $pdfPath = $request->file('pdf_file')
             ->store('modules/pdfs', 'public');
 
-        $coverPath = null;
-
-        if ($validated['cover_mode'] === 'upload') {
-            $coverPath = $request->file('cover_image')
-                ->store('modules/covers', 'public');
+        if (!$pdfPath) {
+            throw new \RuntimeException('PDF gagal disimpan.');
         }
 
-        Module::create([
-            'title' => $validated['title'],
-            'description' => $validated['description'] ?? null,
-            'language_group_id' => $languageGroupId,
-            'pdf_file' => $pdfPath,
-            'cover_image' => $coverPath,
-            'has_exercise' => false,
-            'question_count' => 0,
-        ]);
+        $coverPath = null;
+
+        try {
+            if ($validated['cover_mode'] === 'upload') {
+                $coverPath = $request->file('cover_image')
+                    ->store('modules/covers', 'public');
+
+                if (!$coverPath) {
+                    throw new \RuntimeException('Cover gagal disimpan.');
+                }
+            }
+
+            Module::create([
+                'title' => $validated['title'],
+                'description' => $validated['description'] ?? null,
+                'language_group_id' => $languageGroupId,
+                'pdf_file' => $pdfPath,
+                'cover_image' => $coverPath,
+                'has_exercise' => false,
+                'question_count' => 0,
+            ]);
+        } catch (\Throwable $exception) {
+            Storage::disk('public')->delete($pdfPath);
+
+            if ($coverPath) {
+                Storage::disk('public')->delete($coverPath);
+            }
+
+            throw $exception;
+        }
 
         return redirect()
             ->route('admin.modules.index')
@@ -183,13 +223,19 @@ class ModuleController extends Controller
         $languageGroups = LanguageGroup::when(
             $user->getAttribute('role') === 'pengajar',
             function ($query) use ($user) {
-                $query->where('id', $user->getAttribute('language_group_id'));
+                $query->where(
+                    'id',
+                    $user->getAttribute('language_group_id')
+                );
             }
         )
             ->orderBy('name')
             ->get();
 
-        return view('admin.modules.edit', compact('module', 'languageGroups'));
+        return view(
+            'admin.modules.edit',
+            compact('module', 'languageGroups')
+        );
     }
 
     /**
@@ -211,7 +257,7 @@ class ModuleController extends Controller
         $stream = Storage::disk('public')->readStream($pdfPath);
 
         abort_unless(
-            \is_resource($stream),
+            is_resource($stream),
             404,
             'File PDF modul tidak ditemukan.'
         );
@@ -225,13 +271,18 @@ class ModuleController extends Controller
             [
                 'Content-Type' => 'application/pdf',
                 'Content-Disposition' => 'inline; filename="modul.pdf"',
-                'Cache-Control' => 'private, max-age=300',
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+                'Expires' => '0',
             ]
         );
     }
 
     /**
      * Memperbarui modul.
+     *
+     * Jika PDF diganti, seluruh progres membaca anggota
+     * pada modul tersebut akan direset.
      */
     public function update(Request $request, Module $module)
     {
@@ -243,22 +294,28 @@ class ModuleController extends Controller
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
+
             'language_group_id' => [
-                Rule::requiredIf($user->getAttribute('role') === 'admin'),
+                Rule::requiredIf(
+                    $user->getAttribute('role') === 'admin'
+                ),
                 'nullable',
                 'integer',
                 'exists:language_groups,id',
             ],
+
             'pdf_file' => [
                 'nullable',
                 'file',
                 'mimes:pdf',
                 'max:20480',
             ],
+
             'cover_mode' => [
                 'required',
                 'in:automatic,upload',
             ],
+
             'cover_image' => [
                 'nullable',
                 'required_if:cover_mode,automatic',
@@ -268,8 +325,15 @@ class ModuleController extends Controller
             ],
         ]);
 
+        $disk = Storage::disk('public');
+
         $oldPdfPath = $module->pdf_file;
         $oldCoverPath = $module->cover_image;
+
+        $newPdfPath = null;
+        $newCoverPath = null;
+
+        $pdfReplaced = $request->hasFile('pdf_file');
 
         $data = [
             'title' => $validated['title'],
@@ -279,32 +343,76 @@ class ModuleController extends Controller
                 : $validated['language_group_id'],
         ];
 
-        if ($request->hasFile('pdf_file')) {
-            $data['pdf_file'] = $request->file('pdf_file')
-                ->store('modules/pdfs', 'public');
+        try {
+            // Simpan PDF baru jika admin mengunggahnya.
+            if ($pdfReplaced) {
+                $newPdfPath = $request->file('pdf_file')
+                    ->store('modules/pdfs', 'public');
+
+                if (!$newPdfPath) {
+                    throw new \RuntimeException('PDF baru gagal disimpan.');
+                }
+
+                $data['pdf_file'] = $newPdfPath;
+            }
+
+            // Simpan cover baru jika ada unggahan.
+            if ($request->hasFile('cover_image')) {
+                $newCoverPath = $request->file('cover_image')
+                    ->store('modules/covers', 'public');
+
+                if (!$newCoverPath) {
+                    throw new \RuntimeException('Cover baru gagal disimpan.');
+                }
+
+                $data['cover_image'] = $newCoverPath;
+            }
+
+            // Perubahan database dilakukan dalam transaksi.
+            DB::transaction(function () use (
+                $module,
+                $data,
+                $pdfReplaced
+            ) {
+                $module->update($data);
+
+                // Hanya reset progres jika PDF diganti.
+                if ($pdfReplaced) {
+                    ReadingProgress::where(
+                        'module_id',
+                        $module->id
+                    )->delete();
+                }
+            });
+        } catch (\Throwable $exception) {
+            // Bersihkan file baru jika proses database gagal.
+            if ($newPdfPath) {
+                $disk->delete($newPdfPath);
+            }
+
+            if ($newCoverPath) {
+                $disk->delete($newCoverPath);
+            }
+
+            throw $exception;
         }
 
-        if ($request->hasFile('cover_image')) {
-            $data['cover_image'] = $request->file('cover_image')
-                ->store('modules/covers', 'public');
-        }
-
-        $module->update($data);
-
+        // Hapus PDF lama setelah update berhasil.
         if (
-            $request->hasFile('pdf_file') &&
+            $pdfReplaced &&
             $oldPdfPath &&
-            $oldPdfPath !== $module->pdf_file
+            $oldPdfPath !== $newPdfPath
         ) {
-            Storage::disk('public')->delete($oldPdfPath);
+            $disk->delete($oldPdfPath);
         }
 
+        // Hapus cover lama setelah cover baru berhasil digunakan.
         if (
-            $request->hasFile('cover_image') &&
+            $newCoverPath &&
             $oldCoverPath &&
-            $oldCoverPath !== $module->cover_image
+            $oldCoverPath !== $newCoverPath
         ) {
-            Storage::disk('public')->delete($oldCoverPath);
+            $disk->delete($oldCoverPath);
         }
 
         return redirect()
