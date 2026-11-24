@@ -174,13 +174,13 @@
                             <div class="progress-track">
                                 <div
                                     class="progress-value"
-                                    style="width: {{ $continueProgress->progress_percentage }}%;">
+                                    style="width: f<?= e((float) ($continueProgress->progress_percentage ?? 0)) ?>%;">
                                 </div>
                             </div>
 
                             <p>
-                                Halaman {{ $continueProgress->current_page }}
-                                dari {{ $continueProgress->total_pages }}
+                                Halaman {{ $continueProgress->current_page ?? 0 }}
+                                dari {{ $continueProgress->total_pages ?? 0 }}
                             </p>
                         </div>
 
