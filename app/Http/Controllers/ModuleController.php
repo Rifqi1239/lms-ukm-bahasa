@@ -67,7 +67,13 @@ class ModuleController extends Controller
             abort(403, 'Kamu tidak memiliki akses ke modul ini.');
         }
 
-        $module->load('languageGroup');
+        // Ambil informasi kelompok bahasa dan kedua jenis latihan.
+        $module->load([
+            'languageGroup',
+            'practices',
+        ]);
+
+        // Hitung jumlah seluruh soal dalam modul.
         $module->loadCount('questions');
 
         return view('modules.show', compact('module'));

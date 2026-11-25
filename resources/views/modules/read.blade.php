@@ -198,6 +198,7 @@
         .reader-footer {
             min-height: 42px;
             flex: 0 0 auto;
+            flex-wrap: wrap;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -234,6 +235,37 @@
         .exercise-button:disabled {
             opacity: .55;
             cursor: not-allowed;
+        }
+
+
+        .exercise-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .exercise-button.independent {
+            background: #374151;
+        }
+
+        .exercise-button.assessment {
+            background: #1d4ed8;
+        }
+
+        .exercise-button.independent:hover {
+            background: #1f2937;
+        }
+
+        .exercise-button.assessment:hover {
+            background: #1e40af;
+        }
+
+        .exercise-status {
+            color: #7b8493;
+            font-size: 11px;
+            text-align: right;
         }
 
         /* MODE LAYAR PENUH */
@@ -394,36 +426,106 @@
         </main>
 
         {{-- FOOTER --}}
+
+        {{-- FOOTER --}}
+        @php
+        $practices = $module->practices->keyBy('type');
+
+        $independentPractice = $practices->get('independent');
+        $assessmentPractice = $practices->get('assessment');
+
+        $independentAvailable =
+        $independentPractice &&
+        $independentPractice->is_active &&
+        $independentPractice->questions->isNotEmpty();
+
+        $assessmentHasQuestions =
+        $assessmentPractice &&
+        $assessmentPractice->questions->isNotEmpty();
+
+        $assessmentAvailable =
+        $assessmentHasQuestions &&
+        $assessmentPractice->isAvailable();
+        @endphp
+
         <footer class="reader-footer">
 
             <span class="reader-note">
                 Selesai membaca? Latihan membantu mengulang materi.
             </span>
 
-            @if ($module->questions()->exists())
+            <div class="exercise-actions">
 
-            <a
-                href="{{ route('quiz.start', ['module' => $module->id]) }}"
-                class="exercise-button"
-                id="exercise-button">
-                Kerjakan Latihan (opsional)
-            </a>
+                {{-- LATIHAN MANDIRI --}}
+                @if ($independentAvailable)
 
-            @else
+                <a
+                    href="{{ route('quiz.start', [
+                    'module' => $module->id,
+                    'type' => 'independent'
+                ]) }}"
+                    class="exercise-button independent">
 
-            <button
-                type="button"
-                class="exercise-button"
-                id="exercise-button"
-                disabled
-                aria-disabled="true"
-                title="Modul ini belum memiliki soal latihan">
-                Tidak Ada Latihan
-            </button>
+                    Latihan Mandiri
+                </a>
 
-            @endif
+                @endif
+
+                {{-- LATIHAN PENILAIAN --}}
+                @if ($assessmentAvailable)
+
+                <a
+                    href="{{ route('quiz.start', [
+                    'module' => $module->id,
+                    'type' => 'assessment'
+                ]) }}"
+                    class="exercise-button assessment">
+
+                    Latihan Penilaian
+                </a>
+
+                @elseif ($assessmentHasQuestions)
+
+                <span class="exercise-status">
+
+                    @if (!$assessmentPractice->is_active)
+
+                    Latihan penilaian dinonaktifkan.
+
+                    @elseif (now()->lt($assessmentPractice->start_at))
+
+                    Penilaian dimulai:
+                    {{ $assessmentPractice->start_at->format('d-m-Y H:i') }}
+
+                    @else
+
+                    Waktu penilaian telah berakhir.
+
+                    @endif
+
+                </span>
+
+                @endif
+
+                {{-- JIKA TIDAK ADA LATIHAN --}}
+                @if (!$independentAvailable && !$assessmentHasQuestions)
+
+                <button
+                    type="button"
+                    class="exercise-button"
+                    disabled
+                    aria-disabled="true">
+
+                    Tidak Ada Latihan
+
+                </button>
+
+                @endif
+
+            </div>
 
         </footer>
+
 
     </div>
 
@@ -600,8 +702,7 @@
                 canvas.style.width = `${viewport.width}px`;
                 canvas.style.height = `${viewport.height}px`;
 
-                const transform = outputScale !== 1 ?
-                    [
+                const transform = outputScale !== 1 ? [
                         outputScale, 0,
                         0, outputScale,
                         0, 0

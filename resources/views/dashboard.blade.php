@@ -174,7 +174,7 @@
                             <div class="progress-track">
                                 <div
                                     class="progress-value"
-                                    style="width: f<?= e((float) ($continueProgress->progress_percentage ?? 0)) ?>%;">
+                                    style="width: {{ $continueProgress->progress_percentage }}%;">
                                 </div>
                             </div>
 

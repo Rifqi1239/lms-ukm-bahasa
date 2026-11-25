@@ -5369,3 +5369,207 @@ body {
     }
 }
 
+
+/* =========================================
+   PENYESUAIAN LAYOUT DESKRIPSI MODUL
+========================================= */
+
+/* Bagian latihan menggunakan lebar penuh */
+.module-practices {
+    grid-column: 1 / -1;
+    min-width: 0;
+    margin-top: 12px;
+    padding-top: 26px;
+    border-top: 1px solid #dce3ed;
+}
+
+/* Header latihan */
+.module-practices-header {
+    margin-bottom: 20px;
+}
+
+.module-practices-header h2 {
+    margin: 0 0 6px;
+    color: #202938;
+    font-size: 21px;
+    font-weight: 700;
+}
+
+.module-practices-header p {
+    margin: 0;
+    color: var(--ukm-muted);
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+/* Dua kartu latihan */
+.module-practice-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+/* Kartu latihan */
+.module-practice-card {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 22px;
+    border: 1px solid #dce3ed;
+    border-radius: 12px;
+    background: #ffffff;
+}
+
+/* Judul dan label kartu */
+.module-practice-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.module-practice-heading h3 {
+    margin: 0;
+    color: #202938;
+    font-size: 17px;
+    font-weight: 700;
+}
+
+/* Label jenis latihan */
+.practice-type-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.practice-type-badge.independent {
+    background: #edf2f8;
+    color: #374151;
+}
+
+.practice-type-badge.assessment {
+    background: #eaf0fb;
+    color: #173B70;
+}
+
+/* Deskripsi kartu */
+.module-practice-description {
+    min-height: 48px;
+    margin: 0 0 18px;
+    color: var(--ukm-muted);
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+/* Informasi soal dan jadwal */
+.module-practice-info {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 0;
+    border-top: 1px solid #edf0f4;
+    font-size: 13px;
+}
+
+.module-practice-info span {
+    color: var(--ukm-muted);
+}
+
+.module-practice-info strong {
+    color: #202938;
+    text-align: right;
+    font-weight: 600;
+}
+
+/* Bagian bawah kartu */
+.module-practice-footer {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 13px;
+    margin-top: auto;
+    padding-top: 18px;
+}
+
+/* Status latihan */
+.practice-status {
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.practice-status.available {
+    color: #26734d;
+}
+
+.practice-status.unavailable {
+    color: #7b8493;
+}
+
+.practice-status.upcoming {
+    color: #9a6a16;
+}
+
+/* Tombol latihan */
+.practice-action {
+    width: 100%;
+    min-height: 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 13px;
+}
+
+.practice-action:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* =========================================
+   RESPONSIVE DESKRIPSI MODUL
+========================================= */
+
+@media (max-width: 768px) {
+
+    .module-practice-grid {
+        grid-template-columns: 1fr;
+        gap: 14px;
+    }
+
+    .module-practices {
+        margin-top: 4px;
+        padding-top: 20px;
+    }
+
+    .module-practice-card {
+        padding: 18px;
+    }
+
+    .module-practice-description {
+        min-height: auto;
+    }
+
+}
+
+@media (max-width: 400px) {
+
+    .module-practice-heading {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .module-practice-info {
+        gap: 8px;
+        font-size: 12px;
+    }
+
+}
+
+

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Module;
+use App\Models\ModulePractice;
 use App\Models\Question;
 use App\Models\QuizAttempt;
 use Illuminate\Http\Request;
@@ -14,33 +15,77 @@ use Illuminate\View\View;
 class QuizController extends Controller
 {
     /**
-     * Memulai latihan atau melanjutkan percobaan yang masih aktif.
+     * Memulai latihan mandiri atau latihan penilaian.
+     *
+     * Jenis latihan ditentukan melalui query parameter:
+     * ?type=independent
+     * ?type=assessment
      */
-    public function start(Module $module)
+    public function start(Request $request, Module $module)
     {
         $user = Auth::user();
 
-        // Pastikan anggota hanya mengakses modul kelompok bahasanya.
-        abort_unless(
-            $user->language_group_id !== null &&
-                (int) $user->language_group_id === (int) $module->language_group_id,
-            403,
-            'Kamu tidak memiliki akses ke modul ini.'
-        );
+        $this->authorizeModule($module);
 
-        $questionIds = $module->questions()
+        $validated = $request->validate([
+            'type' => ['nullable', 'in:independent,assessment'],
+        ]);
+
+        // Jika tidak ada parameter type, gunakan latihan mandiri.
+        $type = $validated['type'] ?? 'independent';
+
+        $practice = ModulePractice::where('module_id', $module->id)
+            ->where('type', $type)
+            ->first();
+
+        if (!$practice || !$practice->is_active) {
+            return redirect()
+                ->route('modules.read', $module)
+                ->with('info', 'Jenis latihan ini belum tersedia.');
+        }
+
+        // Periksa jadwal khusus untuk latihan penilaian.
+        if ($type === 'assessment') {
+            if (!$practice->start_at || !$practice->deadline_at) {
+                return redirect()
+                    ->route('modules.read', $module)
+                    ->with('info', 'Jadwal latihan penilaian belum diatur.');
+            }
+
+            if (now()->lt($practice->start_at)) {
+                return redirect()
+                    ->route('modules.read', $module)
+                    ->with('info', 'Latihan penilaian belum dimulai.');
+            }
+
+            if (now()->greaterThanOrEqualTo($practice->deadline_at)) {
+                // Tandai percobaan yang belum selesai sebagai kedaluwarsa.
+                QuizAttempt::where('user_id', $user->id)
+                    ->where('module_practice_id', $practice->id)
+                    ->where('status', 'in_progress')
+                    ->update(['status' => 'expired']);
+
+                return redirect()
+                    ->route('modules.read', $module)
+                    ->with('info', 'Waktu latihan penilaian sudah berakhir.');
+            }
+        }
+
+        $questionIds = $practice->questions()
             ->orderBy('id')
             ->pluck('id');
 
         if ($questionIds->isEmpty()) {
             return redirect()
                 ->route('modules.read', $module)
-                ->with('info', 'Modul ini belum memiliki soal latihan.');
+                ->with('info', 'Latihan ini belum memiliki soal.');
         }
 
-        // Cari percobaan aktif milik pengguna untuk modul ini.
+        // Cari percobaan yang masih berlangsung untuk jenis latihan ini.
         $attempt = QuizAttempt::where('user_id', $user->id)
             ->where('module_id', $module->id)
+            ->where('module_practice_id', $practice->id)
+            ->where('status', 'in_progress')
             ->whereNull('completed_at')
             ->latest('id')
             ->first();
@@ -49,27 +94,29 @@ class QuizController extends Controller
             $attempt = QuizAttempt::create([
                 'user_id' => $user->id,
                 'module_id' => $module->id,
+                'module_practice_id' => $practice->id,
                 'score' => 0,
                 'total_questions' => $questionIds->count(),
                 'started_at' => now(),
+                'status' => 'in_progress',
             ]);
         } else {
-            // Perbarui jumlah soal jika ada perubahan sebelum latihan selesai.
             $attempt->update([
                 'total_questions' => $questionIds->count(),
             ]);
         }
 
-        // Lanjutkan dari soal pertama yang belum dijawab.
+        // Cari soal pertama yang belum dijawab.
         $answeredQuestionIds = $attempt->answers()
             ->whereIn('question_id', $questionIds)
             ->whereNotNull('selected_option_id')
             ->pluck('question_id');
 
-        $nextQuestionId = $questionIds
-            ->first(fn($id) => !$answeredQuestionIds->contains($id));
+        $nextQuestionId = $questionIds->first(
+            fn ($id) => !$answeredQuestionIds->contains($id)
+        );
 
-        // Jika semua sudah dijawab, buka soal pertama agar jawaban bisa ditinjau.
+        // Jika semua sudah dijawab, buka soal pertama.
         $questionId = $nextQuestionId ?? $questionIds->first();
 
         return redirect()->route('quiz.show', [
@@ -86,14 +133,17 @@ class QuizController extends Controller
         $this->authorizeAttempt($attempt);
 
         abort_if(
-            $attempt->completed_at === null,
+            $attempt->status !== 'completed' || $attempt->completed_at === null,
             403,
-            'Latihan ini belum selesai.'
+            'Hasil latihan ini belum tersedia.'
         );
 
         $module = $attempt->module;
+        $practice = $attempt->practice;
 
-        $questions = $module->questions()
+        abort_unless($practice, 404, 'Jenis latihan tidak ditemukan.');
+
+        $questions = $practice->questions()
             ->with('options')
             ->orderBy('id')
             ->get();
@@ -113,6 +163,7 @@ class QuizController extends Controller
         return view('quiz.result', compact(
             'attempt',
             'module',
+            'practice',
             'questions',
             'answers',
             'correctCount',
@@ -122,14 +173,15 @@ class QuizController extends Controller
     }
 
     /**
-     * Menampilkan riwayat latihan milik pengguna yang login.
+     * Menampilkan riwayat latihan pengguna.
      */
     public function history(): View
     {
         $user = Auth::user();
 
-        $attempts = QuizAttempt::with('module')
+        $attempts = QuizAttempt::with(['module', 'practice'])
             ->where('user_id', $user->id)
+            ->where('status', 'completed')
             ->whereNotNull('completed_at')
             ->latest('completed_at')
             ->paginate(10);
@@ -143,12 +195,14 @@ class QuizController extends Controller
     public function show(Request $request, QuizAttempt $attempt): View
     {
         $this->authorizeAttempt($attempt);
-
-        abort_if($attempt->completed_at !== null, 403, 'Latihan ini sudah selesai.');
+        $this->ensureAttemptCanContinue($attempt);
 
         $module = $attempt->module;
+        $practice = $attempt->practice;
 
-        $questions = $module->questions()
+        abort_unless($practice, 404, 'Jenis latihan tidak ditemukan.');
+
+        $questions = $practice->questions()
             ->with('options')
             ->orderBy('id')
             ->get();
@@ -164,7 +218,7 @@ class QuizController extends Controller
         abort_if(
             !$currentQuestion,
             404,
-            'Soal tidak ditemukan dalam modul ini.'
+            'Soal tidak ditemukan dalam latihan ini.'
         );
 
         $answers = $attempt->answers()
@@ -173,12 +227,13 @@ class QuizController extends Controller
             ->keyBy('question_id');
 
         $answeredCount = $answers
-            ->filter(fn($answer) => $answer->selected_option_id !== null)
+            ->filter(fn ($answer) => $answer->selected_option_id !== null)
             ->count();
 
         return view('quiz.show', compact(
             'attempt',
             'module',
+            'practice',
             'questions',
             'currentQuestion',
             'answers',
@@ -192,19 +247,23 @@ class QuizController extends Controller
     public function saveAnswer(Request $request, QuizAttempt $attempt)
     {
         $this->authorizeAttempt($attempt);
-
-        abort_if($attempt->completed_at !== null, 403, 'Latihan ini sudah selesai.');
+        $this->ensureAttemptCanContinue($attempt);
 
         $validated = $request->validate([
             'question_id' => ['required', 'integer'],
             'selected_option_id' => ['required', 'integer'],
         ]);
 
-        $question = Question::where('module_id', $attempt->module_id)
+        $practice = $attempt->practice;
+
+        abort_unless($practice, 404, 'Jenis latihan tidak ditemukan.');
+
+        // Soal harus berasal dari jenis latihan yang sedang dikerjakan.
+        $question = $practice->questions()
             ->whereKey($validated['question_id'])
             ->firstOrFail();
 
-        // Pastikan opsi benar-benar milik soal yang sedang dijawab.
+        // Opsi harus benar-benar milik soal tersebut.
         $optionExists = $question->options()
             ->whereKey($validated['selected_option_id'])
             ->exists();
@@ -232,26 +291,57 @@ class QuizController extends Controller
     public function submit(QuizAttempt $attempt)
     {
         $this->authorizeAttempt($attempt);
+        $this->ensureAttemptCanContinue($attempt);
 
-        abort_if($attempt->completed_at !== null, 403, 'Latihan ini sudah selesai.');
+        $result = DB::transaction(function () use ($attempt) {
+            $lockedAttempt = QuizAttempt::whereKey($attempt->id)
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        $module = $attempt->module;
+            if (
+                $lockedAttempt->status !== 'in_progress' ||
+                $lockedAttempt->completed_at !== null
+            ) {
+                return ['status' => 'already_finished'];
+            }
 
-        $questionIds = $module->questions()->pluck('id');
+            $practice = $lockedAttempt->practice;
 
-        if ($questionIds->isEmpty()) {
-            return redirect()
-                ->route('modules.read', $module)
-                ->with('info', 'Modul ini tidak memiliki soal latihan.');
-        }
+            if (!$practice) {
+                return ['status' => 'practice_missing'];
+            }
 
-        $result = DB::transaction(function () use ($attempt, $questionIds) {
-            $questions = Question::with('options')
-                ->whereIn('id', $questionIds)
+            // Periksa ulang deadline tepat sebelum menyimpan nilai.
+            if ($practice->type === 'assessment') {
+                if (
+                    !$practice->is_active ||
+                    !$practice->start_at ||
+                    !$practice->deadline_at ||
+                    now()->lt($practice->start_at)
+                ) {
+                    return ['status' => 'unavailable'];
+                }
+
+                if (now()->greaterThanOrEqualTo($practice->deadline_at)) {
+                    $lockedAttempt->update([
+                        'status' => 'expired',
+                    ]);
+
+                    return ['status' => 'expired'];
+                }
+            }
+
+            $questions = $practice->questions()
+                ->with('options')
+                ->orderBy('id')
                 ->get();
 
-            $answers = $attempt->answers()
-                ->whereIn('question_id', $questionIds)
+            if ($questions->isEmpty()) {
+                return ['status' => 'no_questions'];
+            }
+
+            $answers = $lockedAttempt->answers()
+                ->whereIn('question_id', $questions->pluck('id'))
                 ->get()
                 ->keyBy('question_id');
 
@@ -263,8 +353,8 @@ class QuizController extends Controller
                 $isCorrect = $answer !== null
                     && $answer->selected_option_id !== null
                     && $question->options->contains(
-                        fn($option) =>
-                        (int) $option->id === (int) $answer->selected_option_id
+                        fn ($option) =>
+                            (int) $option->id === (int) $answer->selected_option_id
                             && (bool) $option->is_correct
                     );
 
@@ -279,17 +369,39 @@ class QuizController extends Controller
                 }
             }
 
-            $attempt->update([
+            $lockedAttempt->update([
                 'score' => $correctCount,
                 'total_questions' => $questions->count(),
                 'completed_at' => now(),
+                'status' => 'completed',
             ]);
 
             return [
+                'status' => 'completed',
                 'score' => $correctCount,
                 'total' => $questions->count(),
             ];
         });
+
+        if ($result['status'] === 'expired') {
+            return redirect()
+                ->route('modules.read', $attempt->module)
+                ->with('info', 'Waktu latihan penilaian sudah berakhir. Percobaan ini tidak dihitung.');
+        }
+
+        if ($result['status'] === 'already_finished') {
+            return redirect()->route('quiz.result', $attempt);
+        }
+
+        if ($result['status'] === 'no_questions') {
+            return redirect()
+                ->route('modules.read', $attempt->module)
+                ->with('info', 'Latihan ini tidak memiliki soal.');
+        }
+
+        if ($result['status'] !== 'completed') {
+            abort(403, 'Latihan tidak dapat diselesaikan.');
+        }
 
         return redirect()->route('quiz.result', $attempt)
             ->with(
@@ -299,18 +411,11 @@ class QuizController extends Controller
     }
 
     /**
-     * Pastikan percobaan benar-benar milik pengguna yang login.
+     * Memastikan anggota hanya mengakses modul kelompok bahasanya.
      */
-    private function authorizeAttempt(QuizAttempt $attempt): void
+    private function authorizeModule(Module $module): void
     {
-        abort_unless(
-            (int) $attempt->user_id === (int) auth()->id(),
-            403,
-            'Kamu tidak memiliki akses ke percobaan ini.'
-        );
-
-        $user = auth()->user();
-        $module = $attempt->module;
+        $user = Auth::user();
 
         abort_unless(
             $user->language_group_id !== null &&
@@ -318,5 +423,58 @@ class QuizController extends Controller
             403,
             'Kamu tidak memiliki akses ke modul ini.'
         );
+    }
+
+    /**
+     * Memastikan percobaan benar-benar milik pengguna yang login.
+     */
+    private function authorizeAttempt(QuizAttempt $attempt): void
+    {
+        abort_unless(
+            (int) $attempt->user_id === (int) Auth::id(),
+            403,
+            'Kamu tidak memiliki akses ke percobaan ini.'
+        );
+
+        $this->authorizeModule($attempt->module);
+    }
+
+    /**
+     * Memastikan percobaan masih boleh dilanjutkan.
+     * Jika deadline penilaian sudah lewat, tandai sebagai expired.
+     */
+    private function ensureAttemptCanContinue(QuizAttempt $attempt): void
+    {
+        abort_if(
+            $attempt->status !== 'in_progress' || $attempt->completed_at !== null,
+            403,
+            'Latihan ini sudah selesai atau tidak dapat dilanjutkan.'
+        );
+
+        $practice = $attempt->practice;
+
+        abort_unless($practice, 404, 'Jenis latihan tidak ditemukan.');
+
+        if ($practice->type === 'assessment') {
+            if (
+                !$practice->is_active ||
+                !$practice->start_at ||
+                !$practice->deadline_at
+            ) {
+                abort(403, 'Latihan penilaian sedang tidak tersedia.');
+            }
+
+            if (now()->lt($practice->start_at)) {
+                abort(403, 'Latihan penilaian belum dimulai.');
+            }
+
+            if (now()->greaterThanOrEqualTo($practice->deadline_at)) {
+                $attempt->update([
+                    'status' => 'expired',
+                ]);
+
+                abort(403, 'Waktu latihan penilaian sudah berakhir.');
+            }
+        }
     }
 }

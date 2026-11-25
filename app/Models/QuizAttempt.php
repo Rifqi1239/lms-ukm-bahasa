@@ -11,10 +11,12 @@ class QuizAttempt extends Model
     protected $fillable = [
         'user_id',
         'module_id',
+        'module_practice_id',
         'score',
         'total_questions',
         'started_at',
         'completed_at',
+        'status',
     ];
 
     protected function casts(): array
@@ -24,7 +26,13 @@ class QuizAttempt extends Model
             'total_questions' => 'integer',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
+            'status' => 'string',
         ];
+    }
+
+    public function practice(): BelongsTo
+    {
+        return $this->belongsTo(ModulePractice::class, 'module_practice_id');
     }
 
     public function user(): BelongsTo

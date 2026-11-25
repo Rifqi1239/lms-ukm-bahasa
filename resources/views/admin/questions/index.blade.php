@@ -16,6 +16,13 @@
         </div>
     @endif
 
+    {{-- PESAN GAGAL --}}
+    @if (session('error'))
+        <div class="question-alert error">
+            {{ session('error') }}
+        </div>
+    @endif
+
     {{-- PESAN VALIDASI --}}
     @if ($errors->any())
         <div class="question-alert error">
@@ -89,6 +96,23 @@
                             {{ \Illuminate\Support\Str::limit($question->question_text, 100) }}
 
                         </p>
+
+                        <div class="question-list-info">
+
+                            <small>
+                                Modul: {{ $question->module?->title ?? '-' }}
+                            </small>
+
+                            <small>
+                                Jenis latihan:
+                                @if ($question->practice?->type === 'assessment')
+                                    <strong>Latihan Penilaian</strong>
+                                @else
+                                    <strong>Latihan Mandiri</strong>
+                                @endif
+                            </small>
+
+                        </div>
 
                         <div class="question-actions">
 
@@ -196,6 +220,21 @@
                             'module_id',
                             $selectedQuestion?->module_id ?? $selectedModuleId
                         );
+
+                        $currentPracticeType = old(
+                            'practice_type',
+                            $selectedQuestion?->practice?->type ?? 'independent'
+                        );
+
+                        $currentStartAt = old(
+                            'start_at',
+                            $selectedQuestion?->practice?->start_at?->format('Y-m-d\TH:i') ?? ''
+                        );
+
+                        $currentDeadlineAt = old(
+                            'deadline_at',
+                            $selectedQuestion?->practice?->deadline_at?->format('Y-m-d\TH:i') ?? ''
+                        );
                     @endphp
 
                     {{-- FORM TAMBAH / UBAH --}}
@@ -231,6 +270,15 @@
                                     value="{{ $formModuleId }}"
                                 >
 
+                                <label>Modul</label>
+
+                                <input
+                                    type="text"
+                                    class="question-input"
+                                    value="{{ $modules->firstWhere('id', (int) $formModuleId)?->title ?? $selectedQuestion?->module?->title }}"
+                                    disabled
+                                >
+
                             @else
 
                                 <label for="module_id">
@@ -260,6 +308,90 @@
                                 </select>
 
                             @endif
+
+                        </div>
+
+                        {{-- JENIS LATIHAN --}}
+                        <div class="question-form-group">
+
+                            <label for="practice_type">
+                                Jenis Latihan
+                            </label>
+
+                            <select
+                                id="practice_type"
+                                name="practice_type"
+                                class="question-select"
+                                required
+                            >
+
+                                <option
+                                    value="independent"
+                                    @selected($currentPracticeType === 'independent')
+                                >
+                                    Latihan Mandiri
+                                </option>
+
+                                <option
+                                    value="assessment"
+                                    @selected($currentPracticeType === 'assessment')
+                                >
+                                    Latihan Penilaian
+                                </option>
+
+                            </select>
+
+                            <small>
+                                Latihan mandiri dapat dikerjakan kapan saja.
+                                Latihan penilaian memiliki jadwal pengerjaan.
+                            </small>
+
+                        </div>
+
+                        {{-- JADWAL LATIHAN PENILAIAN --}}
+                        <div
+                            id="assessment-schedule"
+                            style="{{ $currentPracticeType === 'assessment' ? '' : 'display: none;' }}"
+                        >
+
+                            <div class="question-form-group">
+
+                                <label for="start_at">
+                                    Tanggal dan Waktu Mulai
+                                </label>
+
+                                <input
+                                    type="datetime-local"
+                                    id="start_at"
+                                    name="start_at"
+                                    class="question-input"
+                                    value="{{ $currentStartAt }}"
+                                    {{ $currentPracticeType === 'assessment' ? 'required' : '' }}
+                                >
+
+                            </div>
+
+                            <div class="question-form-group">
+
+                                <label for="deadline_at">
+                                    Deadline Pengerjaan
+                                </label>
+
+                                <input
+                                    type="datetime-local"
+                                    id="deadline_at"
+                                    name="deadline_at"
+                                    class="question-input"
+                                    value="{{ $currentDeadlineAt }}"
+                                    {{ $currentPracticeType === 'assessment' ? 'required' : '' }}
+                                >
+
+                                <small>
+                                    Anggota hanya dapat memulai dan menyelesaikan
+                                    latihan penilaian sebelum deadline.
+                                </small>
+
+                            </div>
 
                         </div>
 
@@ -446,30 +578,94 @@
 
 @endsection
 
-{{-- JAVASCRIPT TAMBAH OPSI E --}}
+{{-- JAVASCRIPT --}}
 @push('scripts')
     <script>
         document.addEventListener('DOMContentLoaded', function () {
+
+            // ==========================================
+            // TAMBAH OPSI E
+            // ==========================================
 
             const addButton = document.getElementById('add-option-button');
             const optionContainer = document.getElementById('option-e-container');
             const optionEInput = document.getElementById('option_E');
 
-            if (!addButton || !optionContainer || !optionEInput) {
-                return;
+            if (addButton && optionContainer && optionEInput) {
+
+                addButton.addEventListener('click', function () {
+
+                    optionContainer.classList.remove('question-option-hidden');
+
+                    optionEInput.disabled = false;
+                    optionEInput.required = true;
+
+                    addButton.hidden = true;
+                    addButton.disabled = true;
+
+                });
+
             }
 
-            addButton.addEventListener('click', function () {
+            // ==========================================
+            // JENIS LATIHAN DAN JADWAL
+            // ==========================================
 
-                optionContainer.classList.remove('question-option-hidden');
+            const practiceType = document.getElementById('practice_type');
+            const scheduleContainer = document.getElementById('assessment-schedule');
 
-                optionEInput.disabled = false;
-                optionEInput.required = true;
+            const startInput = document.getElementById('start_at');
+            const deadlineInput = document.getElementById('deadline_at');
 
-                addButton.hidden = true;
-                addButton.disabled = true;
+            function toggleAssessmentSchedule() {
 
-            });
+                if (!practiceType || !scheduleContainer) {
+                    return;
+                }
+
+                const isAssessment = practiceType.value === 'assessment';
+
+                scheduleContainer.style.display = isAssessment ? '' : 'none';
+
+                startInput.required = isAssessment;
+                deadlineInput.required = isAssessment;
+
+                if (!isAssessment) {
+                    startInput.required = false;
+                    deadlineInput.required = false;
+                }
+
+            }
+
+            if (practiceType) {
+                practiceType.addEventListener('change', toggleAssessmentSchedule);
+                toggleAssessmentSchedule();
+            }
+
+            // ==========================================
+            // VALIDASI DEADLINE DI FORM
+            // ==========================================
+
+            if (startInput && deadlineInput) {
+
+                function validateDeadline() {
+
+                    if (
+                        startInput.value &&
+                        deadlineInput.value
+                    ) {
+                        deadlineInput.min = startInput.value;
+                    } else {
+                        deadlineInput.removeAttribute('min');
+                    }
+
+                }
+
+                startInput.addEventListener('change', validateDeadline);
+
+                validateDeadline();
+
+            }
 
         });
     </script>

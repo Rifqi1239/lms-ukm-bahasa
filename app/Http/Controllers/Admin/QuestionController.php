@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Module;
+use App\Models\ModulePractice;
 use App\Models\Question;
 use App\Models\QuestionOption;
 use App\Models\User;
@@ -11,15 +12,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class QuestionController extends Controller
 {
-    /**
-     * Mengambil pengguna yang sedang login.
-     */
     private function currentUser(): User
     {
-        /** @var User|null $user */
         $user = Auth::user();
 
         abort_unless($user, 401, 'Sesi pengguna tidak valid.');
@@ -27,9 +25,6 @@ class QuestionController extends Controller
         return $user;
     }
 
-    /**
-     * Memastikan pengajar sudah terdaftar dalam kelompok bahasa.
-     */
     private function authorizeTeacherGroup(): void
     {
         $user = $this->currentUser();
@@ -43,9 +38,6 @@ class QuestionController extends Controller
         }
     }
 
-    /**
-     * Memastikan soal berasal dari kelompok bahasa pengajar.
-     */
     private function authorizeQuestionAccess(Question $question): void
     {
         $user = $this->currentUser();
@@ -63,6 +55,76 @@ class QuestionController extends Controller
     }
 
     /**
+     * Memastikan soal pada latihan penilaian tidak diubah
+     * selama periode penilaian sedang berlangsung.
+     */
+    private function ensureQuestionCanBeModified(Question $question): void
+    {
+        $question->loadMissing('practice');
+
+        $practice = $question->practice;
+
+        if (
+            $practice &&
+            $practice->type === 'assessment' &&
+            $practice->isAvailable()
+        ) {
+            throw ValidationException::withMessages([
+                'practice_type' => 'Soal tidak dapat diubah selama latihan penilaian sedang berlangsung.',
+            ]);
+        }
+    }
+
+    /**
+     * Mengambil atau membuat latihan berdasarkan modul dan jenisnya.
+     */
+    private function getOrCreatePractice(array $data): ModulePractice
+    {
+        $practice = ModulePractice::firstOrNew([
+            'module_id' => $data['module_id'],
+            'type' => $data['practice_type'],
+        ]);
+
+        $hasAttempts = $practice->exists
+            && $practice->quizAttempts()->exists();
+
+        if ($practice->exists && $hasAttempts) {
+            if ($practice->type === 'assessment') {
+                $newStart = $data['start_at'] ?? null;
+                $newDeadline = $data['deadline_at'] ?? null;
+
+                $oldStart = $practice->start_at?->format('Y-m-d H:i:s');
+                $oldDeadline = $practice->deadline_at?->format('Y-m-d H:i:s');
+
+                if (
+                    $oldStart !== $newStart ||
+                    $oldDeadline !== $newDeadline
+                ) {
+                    throw ValidationException::withMessages([
+                        'deadline_at' => 'Jadwal latihan penilaian tidak dapat diubah karena sudah memiliki riwayat pengerjaan.',
+                    ]);
+                }
+            }
+
+            return $practice;
+        }
+
+        $practice->is_active = true;
+
+        if ($practice->type === 'independent') {
+            $practice->start_at = null;
+            $practice->deadline_at = null;
+        } else {
+            $practice->start_at = $data['start_at'];
+            $practice->deadline_at = $data['deadline_at'];
+        }
+
+        $practice->save();
+
+        return $practice;
+    }
+
+    /**
      * Menampilkan daftar soal.
      */
     public function index(Request $request)
@@ -71,7 +133,6 @@ class QuestionController extends Controller
 
         $this->authorizeTeacherGroup();
 
-        // Modul yang dapat dipilih.
         $modules = Module::when(
             $user->role === 'pengajar',
             function ($query) use ($user) {
@@ -86,8 +147,11 @@ class QuestionController extends Controller
 
         $selectedModuleId = $request->query('module_id');
 
-        // Daftar soal dibatasi berdasarkan kelompok bahasa.
-        $questions = Question::with(['module', 'options'])
+        $questions = Question::with([
+            'module',
+            'options',
+            'practice',
+        ])
             ->when(
                 $user->role === 'pengajar',
                 function ($query) use ($user) {
@@ -106,11 +170,13 @@ class QuestionController extends Controller
             ->paginate(10)
             ->withQueryString();
 
-        // Soal yang dipilih untuk diedit.
         $selectedQuestion = null;
 
         if ($request->filled('edit')) {
-            $selectedQuestion = Question::with('options')
+            $selectedQuestion = Question::with([
+                'options',
+                'practice',
+            ])
                 ->when(
                     $user->role === 'pengajar',
                     function ($query) use ($user) {
@@ -168,8 +234,11 @@ class QuestionController extends Controller
         $validated = $this->validateQuestion($request);
 
         DB::transaction(function () use ($validated) {
+            $practice = $this->getOrCreatePractice($validated);
+
             $question = Question::create([
                 'module_id' => $validated['module_id'],
+                'module_practice_id' => $practice->id,
                 'question_text' => $validated['question_text'],
                 'explanation' => $validated['explanation'] ?? null,
             ]);
@@ -198,7 +267,10 @@ class QuestionController extends Controller
 
         $this->authorizeQuestionAccess($question);
 
-        $question->load('options');
+        $question->load([
+            'options',
+            'practice',
+        ]);
 
         $modules = Module::when(
             $user->role === 'pengajar',
@@ -225,11 +297,29 @@ class QuestionController extends Controller
     {
         $this->authorizeQuestionAccess($question);
 
+        $this->ensureQuestionCanBeModified($question);
+
         $validated = $this->validateQuestion($request);
 
         DB::transaction(function () use ($validated, $question) {
+            $currentPractice = ModulePractice::findOrFail(
+                $question->module_practice_id
+            );
+
+            $newPractice = $this->getOrCreatePractice($validated);
+
+            if (
+                $currentPractice->id !== $newPractice->id &&
+                $currentPractice->quizAttempts()->exists()
+            ) {
+                throw ValidationException::withMessages([
+                    'practice_type' => 'Jenis latihan soal tidak dapat dipindahkan karena sudah memiliki riwayat pengerjaan.',
+                ]);
+            }
+
             $question->update([
                 'module_id' => $validated['module_id'],
+                'module_practice_id' => $newPractice->id,
                 'question_text' => $validated['question_text'],
                 'explanation' => $validated['explanation'] ?? null,
             ]);
@@ -259,6 +349,17 @@ class QuestionController extends Controller
     public function destroy(Question $question)
     {
         $this->authorizeQuestionAccess($question);
+
+        $this->ensureQuestionCanBeModified($question);
+
+        if (
+            $question->quizAnswers()->exists() ||
+            $question->practice?->quizAttempts()->exists()
+        ) {
+            return redirect()
+                ->route('admin.questions.index')
+                ->with('error', 'Soal tidak dapat dihapus karena sudah memiliki riwayat pengerjaan.');
+        }
 
         $question->delete();
 
@@ -293,24 +394,47 @@ class QuestionController extends Controller
                 'integer',
                 $moduleRule,
             ],
+
+            'practice_type' => [
+                'required',
+                Rule::in(['independent', 'assessment']),
+            ],
+
+            'start_at' => [
+                'nullable',
+                'required_if:practice_type,assessment',
+                'date',
+            ],
+
+            'deadline_at' => [
+                'nullable',
+                'required_if:practice_type,assessment',
+                'date',
+                'after:start_at',
+            ],
+
             'question_text' => [
                 'required',
                 'string',
             ],
+
             'explanation' => [
                 'nullable',
                 'string',
             ],
+
             'options' => [
                 'required',
                 'array',
                 'size:5',
             ],
+
             'options.A' => ['required', 'string', 'max:1000'],
             'options.B' => ['required', 'string', 'max:1000'],
             'options.C' => ['required', 'string', 'max:1000'],
             'options.D' => ['required', 'string', 'max:1000'],
             'options.E' => ['required', 'string', 'max:1000'],
+
             'correct_option' => [
                 'required',
                 Rule::in(['A', 'B', 'C', 'D', 'E']),

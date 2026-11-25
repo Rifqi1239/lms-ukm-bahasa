@@ -10,6 +10,7 @@ class Question extends Model
 {
     protected $fillable = [
         'module_id',
+        'module_practice_id',
         'question_text',
         'explanation',
     ];
@@ -17,6 +18,11 @@ class Question extends Model
     public function module(): BelongsTo
     {
         return $this->belongsTo(Module::class);
+    }
+
+    public function practice(): BelongsTo
+    {
+        return $this->belongsTo(ModulePractice::class, 'module_practice_id');
     }
 
     public function options(): HasMany

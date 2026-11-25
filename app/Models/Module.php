@@ -4,8 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use App\Models\LanguageGroup;
-
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Module extends Model
 {
@@ -19,14 +18,18 @@ class Module extends Model
         'question_count',
     ];
 
-    public function languageGroup()
+    public function languageGroup(): BelongsTo
     {
         return $this->belongsTo(LanguageGroup::class);
     }
 
-
-    public function questions(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function questions(): HasMany
     {
-        return $this->hasMany(\App\Models\Question::class);
+        return $this->hasMany(Question::class);
+    }
+
+    public function practices(): HasMany
+    {
+        return $this->hasMany(ModulePractice::class);
     }
 }
