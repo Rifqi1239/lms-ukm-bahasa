@@ -47,7 +47,7 @@ class QuestionController extends Controller
 
             abort_unless(
                 $question->module &&
-                $question->module->language_group_id == $user->language_group_id,
+                    $question->module->language_group_id == $user->language_group_id,
                 403,
                 'Anda tidak memiliki akses ke soal ini.'
             );
@@ -253,8 +253,13 @@ class QuestionController extends Controller
             }
         });
 
+        $returnModuleId = $request->input('return_module_id')
+            ?: $validated['module_id'];
+
         return redirect()
-            ->route('admin.questions.index')
+            ->route('admin.questions.index', [
+                'module_id' => $returnModuleId,
+            ])
             ->with('success', 'Soal berhasil ditambahkan.');
     }
 
@@ -338,33 +343,54 @@ class QuestionController extends Controller
             }
         });
 
+        $returnModuleId = $request->input('return_module_id')
+            ?: $validated['module_id'];
+
         return redirect()
-            ->route('admin.questions.index')
+            ->route('admin.questions.index', [
+                'module_id' => $returnModuleId,
+            ])
             ->with('success', 'Soal berhasil diperbarui.');
     }
 
     /**
      * Menghapus soal.
      */
-    public function destroy(Question $question)
+    public function destroy(Request $request, Question $question)
     {
         $this->authorizeQuestionAccess($question);
 
         $this->ensureQuestionCanBeModified($question);
+
+        // Tentukan modul yang sedang difilter.
+        $returnModuleId = $request->input('return_module_id');
 
         if (
             $question->quizAnswers()->exists() ||
             $question->practice?->quizAttempts()->exists()
         ) {
             return redirect()
-                ->route('admin.questions.index')
-                ->with('error', 'Soal tidak dapat dihapus karena sudah memiliki riwayat pengerjaan.');
+                ->route(
+                    'admin.questions.index',
+                    $request->filled('return_module_id')
+                        ? ['module_id' => $returnModuleId]
+                        : []
+                )
+                ->with(
+                    'error',
+                    'Soal tidak dapat dihapus karena sudah memiliki riwayat pengerjaan.'
+                );
         }
 
         $question->delete();
 
         return redirect()
-            ->route('admin.questions.index')
+            ->route(
+                'admin.questions.index',
+                $request->filled('return_module_id')
+                    ? ['module_id' => $returnModuleId]
+                    : []
+            )
             ->with('success', 'Soal berhasil dihapus.');
     }
 
